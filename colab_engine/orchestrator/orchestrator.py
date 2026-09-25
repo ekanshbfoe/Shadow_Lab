@@ -2,6 +2,8 @@ import argparse
 import asyncio
 import logging
 import time
+import signal
+import sys
 from aiohttp import web
 import aiohttp_cors
 
@@ -14,17 +16,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 model_manager = None
+start_time = time.time()
 last_request_time = time.time()
 backend_session = None
+runner = None
 
 async def idle_checker():
     """Unloads model if idle for IDLE_TIMEOUT_S."""
     global last_request_time
-    while True:
-        await asyncio.sleep(5)
-        if model_manager.current_model and (time.time() - last_request_time > config.IDLE_TIMEOUT_S):
-            logger.info("Idle timeout reached. Unloading active model to save VRAM.")
-            await model_manager.kill_current_model()
+    try:
+        while True:
+            await asyncio.sleep(5)
+            if model_manager and model_manager.current_model and (time.time() - last_request_time > config.IDLE_TIMEOUT_S):
+                logger.info("Idle timeout reached. Unloading active model to save VRAM.")
+                await model_manager.kill_current_model()
+    except asyncio.CancelledError:
+        pass
 
 async def forward_to_llama_server(request, payload, stream=False):
     """Forwards request to llama-server."""
@@ -33,7 +40,7 @@ async def forward_to_llama_server(request, payload, stream=False):
     
     url = f"http://{model_manager.listen_host}:{model_manager.backend_port}{request.path}"
     
-    if not backend_session:
+    if not backend_session or backend_session.closed:
         backend_session = aiohttp.ClientSession()
         
     try:
@@ -85,7 +92,7 @@ async def handle_anthropic_messages(request):
     
     url = f"http://{model_manager.listen_host}:{model_manager.backend_port}/v1/chat/completions"
     
-    if not backend_session:
+    if not backend_session or backend_session.closed:
         backend_session = aiohttp.ClientSession()
         
     is_stream = openai_payload.get("stream", False)
@@ -117,7 +124,21 @@ async def handle_models(request):
     })
 
 async def handle_health(request):
-    return web.json_response({"status": "ok", "active_model": model_manager.current_model})
+    uptime = int(time.time() - start_time)
+    try:
+        active_model = model_manager.current_model if model_manager else None
+    except AttributeError:
+        active_model = None
+    
+    return web.json_response({"status": "ok", "active_model": active_model, "uptime_s": uptime})
+
+async def on_cleanup(app):
+    """Cleanup hook for graceful shutdown."""
+    logger.info("Cleaning up orchestrator resources...")
+    if backend_session and not backend_session.closed:
+        await backend_session.close()
+    if model_manager:
+        await model_manager.kill_current_model()
 
 def init_app(args):
     app = web.Application()
@@ -125,7 +146,10 @@ def init_app(args):
     app.router.add_post('/v1/chat/completions', handle_openai_chat)
     app.router.add_post('/v1/messages', handle_anthropic_messages)
     app.router.add_get('/v1/models', handle_models)
+    app.router.add_get('/models', handle_models)  # For LobeChat compatibility
     app.router.add_get('/health', handle_health)
+    
+    app.on_cleanup.append(on_cleanup)
     
     cors = aiohttp_cors.setup(app, defaults={
         "*": aiohttp_cors.ResourceOptions(
@@ -139,6 +163,21 @@ def init_app(args):
         cors.add(route)
         
     return app
+
+async def shutdown(sig, loop):
+    """Handle graceful shutdown signals."""
+    logger.info(f"Received exit signal {sig.name}...")
+    
+    # Cancel idle checker
+    for task in asyncio.all_tasks():
+        if task is not asyncio.current_task():
+            task.cancel()
+    
+    # Stop the web runner
+    if runner:
+        await runner.cleanup()
+        
+    loop.stop()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -156,9 +195,28 @@ if __name__ == '__main__':
         backend_port=args.backend_port
     )
     
-    app = init_app(args)
-    
     loop = asyncio.get_event_loop()
+    
+    # Setup signal handlers
+    if sys.platform != 'win32':
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s, loop)))
+    
+    app = init_app(args)
+    runner = web.AppRunner(app)
+    
+    async def start_server():
+        await runner.setup()
+        site = web.TCPSite(runner, args.listen_host, args.listen_port, reuse_address=True)
+        await site.start()
+        logger.info(f"Orchestrator listening on {args.listen_host}:{args.listen_port}")
+        
+    loop.run_until_complete(start_server())
     loop.create_task(idle_checker())
     
-    web.run_app(app, host=args.listen_host, port=args.listen_port)
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        logger.info("Shutdown complete.")
