@@ -11,7 +11,7 @@ import requests
 import json
 import sys
 
-BASE = "http://localhost:8000"
+BASE = "https://cardiac-browsing-extraordinary-immediate.trycloudflare.com"
 PASSED = 0
 FAILED = 0
 
@@ -19,9 +19,9 @@ def test(name, method, url, headers=None, json_body=None, expect_status=200, che
     global PASSED, FAILED
     try:
         if method == "GET":
-            r = requests.get(url, headers=headers, timeout=10)
+            r = requests.get(url, headers=headers, timeout=15)
         else:
-            r = requests.post(url, headers=headers, json=json_body, timeout=10)
+            r = requests.post(url, headers=headers, json=json_body, timeout=90)
         
         if r.status_code != expect_status:
             print(f"  ❌ {name}: Expected {expect_status}, got {r.status_code}")
@@ -121,7 +121,7 @@ try:
     r = requests.post(f"{BASE}/v1/messages",
         headers={"Content-Type": "application/json"},
         json={"model": "deephat-v1-7b", "max_tokens": 100, "stream": True, "messages": [{"role": "user", "content": "test"}]},
-        stream=True, timeout=15)
+        stream=True, timeout=90)
     
     events = []
     for line in r.iter_lines(decode_unicode=True):

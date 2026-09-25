@@ -94,10 +94,14 @@ class ModelManager:
             cmd.extend(md["extra_flags"])
             
             logger.info(f"Launching llama-server: {' '.join(cmd)}")
+            
+            # Pipe to log file instead of DEVNULL so we can see why it crashes in Colab
+            log_file = open('/var/log/llama-server.log', 'w') if os.path.exists('/var/log') else open('llama-server.log', 'w')
+            
             self.process = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stdout=log_file,
+                stderr=log_file
             )
             self.current_model = target_model_key
             
