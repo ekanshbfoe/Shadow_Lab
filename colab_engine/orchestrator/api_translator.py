@@ -28,7 +28,10 @@ def anthropic_to_openai(anthropic_req: dict) -> dict:
                         parts.append({"type": "image_url", "image_url": {"url": data_url}})
                     elif source["type"] == "url":
                         parts.append({"type": "image_url", "image_url": {"url": source["url"]}})
-            messages.append({"role": role, "content": parts})
+            if all(p["type"] == "text" for p in parts):
+                messages.append({"role": role, "content": "\n".join(p["text"] for p in parts)})
+            else:
+                messages.append({"role": role, "content": parts})
     
     return {
         "model": anthropic_req.get("model", "deephat"),
@@ -70,7 +73,10 @@ async def translate_sse_stream(response_stream, model_name: str):
     
     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
     
+    done = False
     async for chunk in response_stream:
+        if done:
+            break
         if not chunk:
             continue
         try:
@@ -79,17 +85,24 @@ async def translate_sse_stream(response_stream, model_name: str):
                 if line.startswith("data: "):
                     data_str = line[6:].strip()
                     if data_str == "[DONE]":
+                        done = True
                         break
                     data = json.loads(data_str)
-                    delta = data.get("choices", [{}])[0].get("delta", {})
-                    if "content" in delta and delta["content"]:
-                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': delta['content']}})}\n\n"
                     
-                    finish_reason = data.get("choices", [{}])[0].get("finish_reason")
-                    if finish_reason:
-                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
-                        usage = data.get("usage", {})
-                        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _map_finish_reason(finish_reason)}, 'usage': {'output_tokens': usage.get('completion_tokens', 0)}})}\n\n"
+                    choices = data.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        if "content" in delta and delta["content"]:
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': delta['content']}})}\n\n"
+                        
+                        finish_reason = choices[0].get("finish_reason")
+                        if finish_reason:
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                            
+                    if "usage" in data and data["usage"]:
+                        usage = data["usage"]
+                        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _map_finish_reason(choices[0].get('finish_reason', 'stop') if choices else 'stop')}, 'usage': {'output_tokens': usage.get('completion_tokens', 0)}})}\n\n"
+                        
         except Exception:
             pass
             

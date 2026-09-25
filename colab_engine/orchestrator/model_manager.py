@@ -22,11 +22,12 @@ class ModelManager:
     async def get_vram_usage(self) -> int:
         """Returns VRAM usage in MB via nvidia-smi."""
         try:
-            result = subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                text=True
-            ).strip()
-            return int(result.split()[0])
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await proc.communicate()
+            return int(stdout.decode().strip().split()[0])
         except Exception as e:
             logger.error(f"Failed to read VRAM usage: {e}")
             return 99999
@@ -103,15 +104,15 @@ class ModelManager:
             # Poll health
             health_url = f"http://{self.listen_host}:{self.backend_port}/health"
             retries = 0
-            while retries < config.HEALTH_POLL_MAX_RETRIES:
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(health_url, timeout=1.0) as resp:
+            async with aiohttp.ClientSession() as session:
+                while retries < config.HEALTH_POLL_MAX_RETRIES:
+                    try:
+                        async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=1.0)) as resp:
                             if resp.status == 200:
                                 logger.info(f"Model {target_model_key} loaded and healthy.")
                                 return
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
                 retries += 1
                 await asyncio.sleep(config.HEALTH_POLL_INTERVAL_S)
                 

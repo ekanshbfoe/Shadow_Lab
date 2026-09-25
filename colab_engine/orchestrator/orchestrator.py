@@ -5,6 +5,7 @@ import time
 import signal
 import sys
 from aiohttp import web
+import aiohttp
 import aiohttp_cors
 
 import config
@@ -20,6 +21,7 @@ start_time = time.time()
 last_request_time = time.time()
 backend_session = None
 runner = None
+mock_mode = False
 
 async def idle_checker():
     """Unloads model if idle for IDLE_TIMEOUT_S."""
@@ -33,12 +35,13 @@ async def idle_checker():
     except asyncio.CancelledError:
         pass
 
-async def forward_to_llama_server(request, payload, stream=False):
+async def forward_to_llama_server(request, payload, stream=False, override_path=None):
     """Forwards request to llama-server."""
     global last_request_time, backend_session
     last_request_time = time.time()
     
-    url = f"http://{model_manager.listen_host}:{model_manager.backend_port}{request.path}"
+    path = override_path or request.path
+    url = f"http://{model_manager.listen_host}:{model_manager.backend_port}{path}"
     
     if not backend_session or backend_session.closed:
         backend_session = aiohttp.ClientSession()
@@ -46,7 +49,14 @@ async def forward_to_llama_server(request, payload, stream=False):
     try:
         if stream:
             async with backend_session.post(url, json=payload, headers={'Content-Type': 'application/json'}) as resp:
-                response = web.StreamResponse(status=resp.status, headers=resp.headers)
+                headers = dict(resp.headers)
+                headers.update({
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'X-Accel-Buffering': 'no',
+                })
+                response = web.StreamResponse(status=resp.status, headers=headers)
                 await response.prepare(request)
                 async for chunk in resp.content.iter_any():
                     await response.write(chunk)
@@ -71,7 +81,8 @@ async def handle_openai_chat(request):
     # Process images if needed
     payload["messages"] = validate_images(payload.get("messages", []))
     
-    await model_manager.ensure_model(model_req)
+    if not mock_mode:
+        await model_manager.ensure_model(model_req)
     return await forward_to_llama_server(request, payload, stream=payload.get("stream", False))
 
 async def handle_anthropic_messages(request):
@@ -85,7 +96,8 @@ async def handle_anthropic_messages(request):
     openai_payload["messages"] = validate_images(openai_payload.get("messages", []))
     
     model_req = openai_payload.get("model", "deephat")
-    await model_manager.ensure_model(model_req)
+    if not mock_mode:
+        await model_manager.ensure_model(model_req)
     
     global last_request_time, backend_session
     last_request_time = time.time()
@@ -97,16 +109,24 @@ async def handle_anthropic_messages(request):
         
     is_stream = openai_payload.get("stream", False)
     
+    if is_stream:
+        openai_payload["stream_options"] = {"include_usage": True}
+        
     try:
         if is_stream:
-            resp = await backend_session.post(url, json=openai_payload)
-            response = web.StreamResponse(status=resp.status, headers={'Content-Type': 'text/event-stream'})
-            await response.prepare(request)
-            async for sse_chunk in translate_sse_stream(resp.content, model_req):
-                await response.write(sse_chunk.encode('utf-8'))
-            return response
+            async with backend_session.post(url, json=openai_payload, headers={'Content-Type': 'application/json'}) as resp:
+                response = web.StreamResponse(status=resp.status, headers={
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'X-Accel-Buffering': 'no',
+                })
+                await response.prepare(request)
+                async for sse_chunk in translate_sse_stream(resp.content, model_req):
+                    await response.write(sse_chunk.encode('utf-8'))
+                return response
         else:
-            async with backend_session.post(url, json=openai_payload) as resp:
+            async with backend_session.post(url, json=openai_payload, headers={'Content-Type': 'application/json'}) as resp:
                 openai_resp = await resp.json()
                 anthropic_resp = openai_to_anthropic(openai_resp, model_req)
                 return web.json_response(anthropic_resp)
@@ -184,9 +204,12 @@ if __name__ == '__main__':
     parser.add_argument('--listen-host', default='0.0.0.0')
     parser.add_argument('--listen-port', type=int, default=8080)
     parser.add_argument('--backend-port', type=int, default=8081)
-    parser.add_argument('--llama-server', required=True)
-    parser.add_argument('--model-dir', required=True)
+    parser.add_argument('--llama-server', default='dummy')
+    parser.add_argument('--model-dir', default='dummy')
+    parser.add_argument('--mock', action='store_true', help='Skip model management for local testing')
     args = parser.parse_args()
+    
+    mock_mode = args.mock
     
     model_manager = ModelManager(
         llama_server_bin=args.llama_server,
@@ -195,7 +218,12 @@ if __name__ == '__main__':
         backend_port=args.backend_port
     )
     
-    loop = asyncio.get_event_loop()
+    if mock_mode:
+        model_manager.current_model = 'deephat'
+        logger.info('Mock mode enabled — skipping model management')
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
     # Setup signal handlers
     if sys.platform != 'win32':
