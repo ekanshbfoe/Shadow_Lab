@@ -37,10 +37,11 @@ class ModelManager:
             return
 
         logger.info(f"Sending SIGTERM to llama-server (PID: {self.process.pid})")
-        self.process.terminate()
-        
         try:
+            self.process.terminate()
             await asyncio.wait_for(self.process.wait(), timeout=10.0)
+        except ProcessLookupError:
+            logger.info("Process already terminated.")
         except asyncio.TimeoutError:
             logger.warning("llama-server did not terminate, sending SIGKILL")
             self.process.kill()
