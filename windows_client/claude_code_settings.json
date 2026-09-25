@@ -1,0 +1,6 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://dummy-tunnel.trycloudflare.com",
+    "ANTHROPIC_API_KEY": "sk-shadowlab-not-used"
+  }
+}

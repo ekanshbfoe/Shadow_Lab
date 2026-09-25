@@ -1,0 +1,17 @@
+{
+  "inferenceProvider": "gateway",
+  "inferenceGatewayBaseUrl": "https://dummy-tunnel.trycloudflare.com",
+  "inferenceGatewayAuthScheme": "x-api-key",
+  "inferenceGatewayApiKey": "sk-shadowlab-not-used",
+  "modelDiscoveryEnabled": false,
+  "inferenceModels": [
+    {
+      "name": "deephat-v1-7b",
+      "labelOverride": "DeepHat-V1-7B [Security]"
+    },
+    {
+      "name": "qwen2.5-vl-7b",
+      "labelOverride": "Qwen2.5-VL-7B [Vision]"
+    }
+  ]
+}
