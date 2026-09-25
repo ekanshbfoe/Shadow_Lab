@@ -202,7 +202,7 @@ async def shutdown(sig, loop):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--listen-host', default='0.0.0.0')
-    parser.add_argument('--listen-port', type=int, default=8080)
+    parser.add_argument('--listen-port', type=int, default=8000)
     parser.add_argument('--backend-port', type=int, default=8081)
     parser.add_argument('--llama-server', default='dummy')
     parser.add_argument('--model-dir', default='dummy')
