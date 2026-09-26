@@ -11,7 +11,7 @@ import requests
 import json
 import sys
 
-BASE = "http://localhost:8000"
+BASE = "https://cardiac-browsing-extraordinary-immediate.trycloudflare.com"
 PASSED = 0
 FAILED = 0
 
