@@ -58,6 +58,8 @@ if (Test-Path $ClaudeCodeSettings) {
 
 # 4. Update current session env var
 $env:ANTHROPIC_BASE_URL = $NewUrl
+$env:ANTHROPIC_AUTH_TOKEN = "ollama"
+$env:ANTHROPIC_API_KEY = "ollama"
 Write-Host "  ✅ Session environment updated"
 
 # 5. Remind about Cline & Open WebUI

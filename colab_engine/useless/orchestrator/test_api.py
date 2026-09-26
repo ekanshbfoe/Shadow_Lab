@@ -11,7 +11,7 @@ import requests
 import json
 import sys
 
-BASE = "https://arise-solved-farmers-essex.trycloudflare.com"
+BASE = "https://changed-invited-organizing-mission.trycloudflare.com"
 PASSED = 0
 FAILED = 0
 

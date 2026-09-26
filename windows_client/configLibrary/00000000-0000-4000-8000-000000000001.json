@@ -3,17 +3,17 @@
   "name": "ShadowLab Private AI",
   "description": "Self-hosted AI lab via Colab + Cloudflare Tunnel",
   "inferenceProvider": "gateway",
-  "inferenceGatewayBaseUrl": "https://dummy-tunnel.trycloudflare.com",
-  "inferenceGatewayAuthScheme": "x-api-key",
-  "inferenceGatewayApiKey": "sk-shadowlab-not-used",
-  "modelDiscoveryEnabled": false,
+  "inferenceGatewayBaseUrl": "https://changed-invited-organizing-mission.trycloudflare.com",
+  "inferenceGatewayAuthScheme": "bearer",
+  "inferenceGatewayApiKey": "ollama",
+  "modelDiscoveryEnabled": true,
   "inferenceModels": [
     {
-      "name": "deephat-v1-7b",
+      "name": "deephat",
       "labelOverride": "DeepHat-V1-7B [Security]"
     },
     {
-      "name": "qwen2.5-vl-7b",
+      "name": "qwen2.5vl:7b",
       "labelOverride": "Qwen2.5-VL-7B [Vision]"
     }
   ],
