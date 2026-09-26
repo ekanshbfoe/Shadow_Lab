@@ -29,7 +29,7 @@ async def idle_checker():
     try:
         while True:
             await asyncio.sleep(5)
-            if model_manager and model_manager.current_model and (time.time() - last_request_time > config.IDLE_TIMEOUT_S):
+            if model_manager and model_manager.current_model and not model_manager.lock.locked() and (time.time() - last_request_time > config.IDLE_TIMEOUT_S):
                 logger.info("Idle timeout reached. Unloading active model to save VRAM.")
                 await model_manager.kill_current_model()
     except asyncio.CancelledError:
@@ -81,25 +81,48 @@ async def handle_openai_chat(request):
     # Process images if needed
     payload["messages"] = validate_images(payload.get("messages", []))
     
+    global last_request_time
+    last_request_time = time.time()
     if not mock_mode:
         await model_manager.ensure_model(model_req)
+    last_request_time = time.time()
+    
     return await forward_to_llama_server(request, payload, stream=payload.get("stream", False))
+def anthropic_error_response(status: int, message: str):
+    """Returns a properly formatted Anthropic error JSON."""
+    error_type = {
+        400: "invalid_request_error",
+        401: "authentication_error",
+        403: "permission_error",
+        404: "not_found_error",
+        429: "rate_limit_error",
+        500: "api_error",
+        502: "overloaded_error"
+    }.get(status, "api_error")
+    
+    return web.json_response({
+        "type": "error",
+        "error": {
+            "type": error_type,
+            "message": message
+        }
+    }, status=status)
 
 async def handle_anthropic_messages(request):
     """Handles Anthropic /v1/messages."""
     try:
         anthropic_payload = await request.json()
     except:
-        return web.Response(status=400, text="Invalid JSON")
+        return anthropic_error_response(400, "Invalid JSON body")
         
     openai_payload = anthropic_to_openai(anthropic_payload)
     openai_payload["messages"] = validate_images(openai_payload.get("messages", []))
     
     model_req = openai_payload.get("model", "deephat")
+    global last_request_time, backend_session
+    last_request_time = time.time()
     if not mock_mode:
         await model_manager.ensure_model(model_req)
-    
-    global last_request_time, backend_session
     last_request_time = time.time()
     
     url = f"http://{model_manager.listen_host}:{model_manager.backend_port}/v1/chat/completions"
@@ -132,7 +155,7 @@ async def handle_anthropic_messages(request):
                 return web.json_response(anthropic_resp)
     except Exception as e:
         logger.error(f"Error forwarding request: {e}")
-        return web.Response(status=502, text="Bad Gateway")
+        return anthropic_error_response(502, "Model engine overloaded or crashed.")
 
 async def handle_models(request):
     return web.json_response({

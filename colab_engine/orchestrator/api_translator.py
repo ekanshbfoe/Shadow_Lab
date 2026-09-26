@@ -7,7 +7,8 @@ def anthropic_to_openai(anthropic_req: dict) -> dict:
     if "system" in anthropic_req:
         system_text = anthropic_req["system"]
         if isinstance(system_text, list):
-            system_text = "\n".join(b["text"] for b in system_text if b["type"] == "text")
+            # Only extract 'text' fields, silently ignoring cache_control, etc.
+            system_text = "".join(b.get("text", "") for b in system_text if b.get("type") == "text")
         messages.append({"role": "system", "content": system_text})
     
     for msg in anthropic_req.get("messages", []):
@@ -19,28 +20,39 @@ def anthropic_to_openai(anthropic_req: dict) -> dict:
         elif isinstance(content, list):
             parts = []
             for block in content:
-                if block["type"] == "text":
-                    parts.append({"type": "text", "text": block["text"]})
-                elif block["type"] == "image":
-                    source = block["source"]
-                    if source["type"] == "base64":
-                        data_url = f"data:{source['media_type']};base64,{source['data']}"
+                if block.get("type") == "text":
+                    parts.append({"type": "text", "text": block.get("text", "")})
+                elif block.get("type") == "image":
+                    source = block.get("source", {})
+                    if source.get("type") == "base64":
+                        data_url = f"data:{source.get('media_type', 'image/jpeg')};base64,{source.get('data', '')}"
                         parts.append({"type": "image_url", "image_url": {"url": data_url}})
-                    elif source["type"] == "url":
-                        parts.append({"type": "image_url", "image_url": {"url": source["url"]}})
+                    elif source.get("type") == "url":
+                        parts.append({"type": "image_url", "image_url": {"url": source.get("url", "")}})
+            
             if all(p["type"] == "text" for p in parts):
-                messages.append({"role": role, "content": "\n".join(p["text"] for p in parts)})
+                messages.append({"role": role, "content": "".join(p["text"] for p in parts)})
             else:
                 messages.append({"role": role, "content": parts})
     
-    return {
+    openai_req = {
         "model": anthropic_req.get("model", "deephat"),
         "messages": messages,
         "max_tokens": anthropic_req.get("max_tokens", 4096),
-        "temperature": anthropic_req.get("temperature", 0.7),
         "stream": anthropic_req.get("stream", False),
-        "top_p": anthropic_req.get("top_p", 0.9),
     }
+    
+    # Only forward optional params if provided by client
+    if "temperature" in anthropic_req:
+        openai_req["temperature"] = anthropic_req["temperature"]
+    if "top_p" in anthropic_req:
+        openai_req["top_p"] = anthropic_req["top_p"]
+    if "top_k" in anthropic_req:
+        openai_req["top_k"] = anthropic_req["top_k"]
+    if "stop_sequences" in anthropic_req:
+        openai_req["stop"] = anthropic_req["stop_sequences"]
+        
+    return openai_req
 
 def openai_to_anthropic(openai_resp: dict, model_name: str) -> dict:
     """Convert OpenAI Chat Completions response to Anthropic Messages format."""
@@ -67,13 +79,16 @@ def _map_finish_reason(openai_reason: str) -> str:
 
 async def translate_sse_stream(response_stream, model_name: str):
     """Translates OpenAI SSE to Anthropic SSE."""
-    msg_id = "msg_stream"
+    import uuid
+    msg_id = f"msg_{uuid.uuid4().hex}"
     
     yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'model': model_name, 'content': [], 'stop_reason': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
     
     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+    yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
     
     done = False
+    index = 0
     async for chunk in response_stream:
         if done:
             break
@@ -93,15 +108,19 @@ async def translate_sse_stream(response_stream, model_name: str):
                     if choices:
                         delta = choices[0].get("delta", {})
                         if "content" in delta and delta["content"]:
-                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': delta['content']}})}\n\n"
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': index, 'delta': {'type': 'text_delta', 'text': delta['content']}})}\n\n"
                         
                         finish_reason = choices[0].get("finish_reason")
                         if finish_reason:
-                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
                             
                     if "usage" in data and data["usage"]:
                         usage = data["usage"]
-                        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _map_finish_reason(choices[0].get('finish_reason', 'stop') if choices else 'stop')}, 'usage': {'output_tokens': usage.get('completion_tokens', 0)}})}\n\n"
+                        stop_reason = "end_turn"
+                        if choices and choices[0].get("finish_reason"):
+                            stop_reason = _map_finish_reason(choices[0]["finish_reason"])
+                            
+                        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason}, 'usage': {'output_tokens': usage.get('completion_tokens', 0)}})}\n\n"
                         
         except Exception:
             pass
