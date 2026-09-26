@@ -1,21 +1,31 @@
 # update_tunnel_url.ps1
 # Automates the sync of ephemeral Cloudflare URLs across Windows configs
+param (
+    [string]$UrlOverride = ""
+)
 
-# Ensure the parent directory for the local sync file exists
-$GoogleDriveSyncDir = "$env:USERPROFILE\Google Drive\shadowlab"
-if (-not (Test-Path $GoogleDriveSyncDir)) {
-    Write-Host "Creating local sync directory: $GoogleDriveSyncDir"
-    New-Item -ItemType Directory -Force -Path $GoogleDriveSyncDir | Out-Null
+if ($UrlOverride -ne "") {
+    $NewUrl = $UrlOverride.Trim()
+    if ($NewUrl.EndsWith("/")) {
+        $NewUrl = $NewUrl.TrimEnd("/")
+    }
+} else {
+    # Ensure the parent directory for the local sync file exists
+    $GoogleDriveSyncDir = "$env:USERPROFILE\Google Drive\shadowlab"
+    if (-not (Test-Path $GoogleDriveSyncDir)) {
+        Write-Host "Creating local sync directory: $GoogleDriveSyncDir"
+        New-Item -ItemType Directory -Force -Path $GoogleDriveSyncDir | Out-Null
+    }
+
+    $TunnelUrlSource = "$GoogleDriveSyncDir\tunnel_url.txt"
+
+    if (-not (Test-Path $TunnelUrlSource)) {
+        Write-Error "Tunnel URL source file not found at $TunnelUrlSource. Ensure Colab has written the URL and Google Drive has synced."
+        exit 1
+    }
+
+    $NewUrl = (Get-Content $TunnelUrlSource -Raw).Trim()
 }
-
-$TunnelUrlSource = "$GoogleDriveSyncDir\tunnel_url.txt"
-
-if (-not (Test-Path $TunnelUrlSource)) {
-    Write-Error "Tunnel URL source file not found at $TunnelUrlSource. Ensure Colab has written the URL and Google Drive has synced."
-    exit 1
-}
-
-$NewUrl = (Get-Content $TunnelUrlSource -Raw).Trim()
 if (-not ($NewUrl -match "^https://.*\.trycloudflare\.com$")) {
     Write-Error "Invalid tunnel URL: $NewUrl"
     exit 1
